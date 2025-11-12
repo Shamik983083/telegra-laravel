@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use App\Models\Order;
 
 class CheckoutController extends Controller
@@ -29,19 +30,29 @@ class CheckoutController extends Controller
             'first_name' => 'required|string',
             'last_name'  => 'required|string',
             'email'      => 'required|email',
-            'phone'      => 'required|string',
+            'phone'      => 'required|numeric',
             'address'    => 'required|string',
             'city'       => 'required|string',
             'state'      => 'required|string',
-            'zip'        => 'required|string',
+            'zip'        => 'required|numeric',
             'date_of_birth' => 'nullable|date',
-            'gender' => 'nullable|string'
+            'gender' => 'nullable|string',
+            'cardnumber' => 'required|numeric',
+            'expmonth' => 'required|numeric',
+            'expyear' => 'required|numeric',
+            'cvv' => 'required|numeric',
+            'shipping' => 'required|numeric', // ✅ Add shipping validation
+
         ]);
 
         $product = session('selected_product');
         if (!$product) {
             return redirect('/products')->with('error', 'No product selected.');
         }
+
+        // ✅ Dynamic shipping from form
+        $shippingCost = (float) $request->input('shipping');
+        $total = $product['price'] + $shippingCost;
 
         // ✅ Prepare API payload
         $payload = [
@@ -106,8 +117,8 @@ class CheckoutController extends Controller
                 'product_id'       => $product['id'],
                 'product_name'     => $product['name'],
                 'price'            => $product['price'],
-                'shipping'         => 10.00,
-                'total'            => $product['price'] + 10.00,
+                'shipping'         => $shippingCost, // ✅ Store dynamic shipping
+                'total'            => $total,
                 'first_name'       => $request->first_name,
                 'last_name'        => $request->last_name,
                 'email'            => $request->email,
@@ -126,6 +137,70 @@ class CheckoutController extends Controller
             'telegra_order_id' => $orderId,
             'questionnaire_instance_id' => $questionnaireId
         ]);
+
+ // ✅ Step 2: Create order in VRIO CRM
+        $vrioUrl = config('vrio.base_url') . '/orders';
+        $vrioToken = config('vrio.token');
+
+         $vrioPayload = [
+            'action' => '',
+            'connection_id' => 1, // ⚠️ Replace with your actual connection ID
+            'campaign_id' => 67,   // ⚠️ Replace with your actual campaign ID
+            'email' => $request->email,
+            'first_name' => $request->first_name,
+            'last_name' => $request->last_name,
+            'phone' => $request->phone,
+            'birthday' => $request->date_of_birth ?? '1990-01-01',
+            'gender' => $request->gender ?? 'male',
+            'offers' => [
+                [
+                    'offer_id' => 2, // depends on Vrio campaign offer ID
+                    'order_offer_quantity' => 1,
+                    'item_id' => 2082, //✅ Replace 5 with the actual item_id from VRIO
+                    'quantity' => 1,
+                ],
+            ],
+            'bill_fname' => $request->first_name,
+            'bill_lname' => $request->last_name,
+            'bill_address1' => $request->address,
+            'bill_city' => $request->city,
+            'bill_state' => $request->state,
+            'bill_zipcode' => $request->zip,
+            'bill_country' => 'US',
+            'same_address' => true,
+            'payment_method_id' => 1, // Credit Card
+            'card_type_id' => 2, // Mastercard (for example)
+            'card_number' => $request->cardnumber, // test card for sandbox
+            'card_cvv' => $request->cvv,
+            'card_exp_month' => $request->expmonth,
+            'card_exp_year' => $request->expyear,
+            'ip_address' => $request->ip(),
+        ];
+
+
+   $vrioResponse = Http::withHeaders([
+        'X-Api-Key' => $vrioToken,
+        'Accept' => 'application/json',
+    ])
+    ->asJson()
+    ->post($vrioUrl, $vrioPayload);
+
+      if ($vrioResponse->failed()) {
+    $errorBody = $vrioResponse->json() ?? $vrioResponse->body();
+
+    Log::error('❌ VRIO Order Failed', [
+        'payload' => $vrioPayload,
+        'response' => $errorBody,
+    ]);
+
+    // ✅ Return back to checkout with the VRIO error visible
+    return back()->with('error', 'VRIO order failed: ' . json_encode($errorBody));
+} else {
+    Log::info('✅ VRIO Order Created', [
+        'response' => $vrioResponse->json(),
+    ]);
+}
+
 
             // return redirect('/checkout')
             //     ->with('success', 'Order successfully created in Telegra!')

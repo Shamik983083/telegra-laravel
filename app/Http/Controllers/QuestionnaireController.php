@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
-use App\Models\QuestionnaireResponse; // ✅ <--- ADD THIS IMPORT
+use Illuminate\Support\Facades\Log;
+use App\Models\QuestionnaireResponse;
+
 class QuestionnaireController extends Controller
 {
     public function show()
@@ -16,44 +18,34 @@ class QuestionnaireController extends Controller
             return redirect('/checkout')->with('error', 'Questionnaire not found.');
         }
 
-        // ✅ Use values from config (which reads .env)
-        $baseUrl = config('telegra.base_url');
+        $baseUrl = rtrim(config('telegra.base_url'), '/');
         $token = config('telegra.token');
-
         $url = "{$baseUrl}/questionnaireInstances/{$questionnaireId}";
 
-        // ✅ API request
         $response = Http::withToken($token)->get($url);
 
         if ($response->failed()) {
-            $status = $response->status();
-            $body = $response->body();
+            Log::error('❌ Failed to fetch questionnaire', [
+                'url' => $url,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
 
-            return response()->view('questionnaire', [
+            return view('questionnaire', [
                 'product' => $product,
                 'questions' => [],
-                'rawResponse' => [
-                    'error' => true,
-                    'status' => $status,
-                    'body' => $body,
-                    'url' => $url,
-                ]
+                'rawResponse' => ['error' => true, 'body' => $response->body()],
             ]);
         }
 
         $data = $response->json();
-
-        // ✅ Extract questions from `locations` (Telegra format)
         $questions = $data['questionnaire']['locations'] ?? [];
+        $currentLocation = $data['currentLocation'] ?? null;
 
-        return view('questionnaire', [
-            'product' => $product,
-            'questions' => $questions,
-            'rawResponse' => $data,
-        ]);
+        return view('questionnaire', compact('product', 'questions', 'currentLocation'));
     }
 
-public function store(Request $request)
+    public function store(Request $request)
     {
         $answers = $request->input('answers', []);
         $product = session('selected_product');
@@ -64,7 +56,7 @@ public function store(Request $request)
             return back()->with('error', 'Please answer all questions.');
         }
 
-        // Save to DB
+        // ✅ Save locally
         QuestionnaireResponse::create([
             'session_id' => $sessionId,
             'product_id' => $product['id'] ?? null,
@@ -72,10 +64,78 @@ public function store(Request $request)
             'responses' => $answers,
         ]);
 
-        // Save in session too (for review or next step)
+        $baseUrl = rtrim(config('telegra.base_url'), '/');
+        $token = config('telegra.token');
+
+        $currentLocation = null;
+        $isValid = false;
+
+        foreach ($answers as $location => $value) {
+            $endpoint = "{$baseUrl}/questionnaireInstances/{$questionnaireId}/actions/answerLocation?shouldNavigateNext=true";
+
+            $payload = [
+                'location' => $location,
+                'value' => $this->normalizeValue($value),
+            ];
+
+            $response = Http::withToken($token)->asJson()->post($endpoint, $payload);
+
+            Log::info('📤 Sent to Telegra', [
+                'url' => $endpoint,
+                'payload' => $payload,
+                'status' => $response->status(),
+                'response' => $response->json(),
+            ]);
+
+            if ($response->failed()) {
+                Log::error('❌ Failed to push answer to Telegra', [
+                    'url' => $endpoint,
+                    'payload' => $payload,
+                    'status' => $response->status(),
+                    'response' => $response->body(),
+                ]);
+                continue;
+            }
+
+            $result = $response->json();
+
+            // ✅ Capture next question
+            $currentLocation = $result['currentLocation'] ?? null;
+            $isValid = $result['valid'] ?? false;
+
+            if ($isValid) {
+                Log::info('✅ Questionnaire marked as complete by Telegra', [
+                    'final_location' => $location,
+                ]);
+                break;
+            }
+
+            if (!$currentLocation) {
+                Log::warning('⚠️ No currentLocation returned, stopping iteration.');
+                break;
+            }
+        }
+
         session(['questionnaire_answers' => $answers]);
 
-        return redirect('/thank-you')->with('success', 'Your responses have been saved successfully!');
+        return redirect('/thank-you')
+            ->with('success', 'Your responses have been submitted successfully!');
     }
 
+    private function normalizeValue($value)
+    {
+        if (is_file($value)) {
+            return [base64_encode(file_get_contents($value))];
+        }
+
+        if (is_string($value) && str_contains($value, ',')) {
+            return explode(',', $value);
+        }
+
+        if (is_array($value)) {
+            return $value;
+        }
+
+        return (string) $value;
+    }
 }

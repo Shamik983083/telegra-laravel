@@ -28,3 +28,7 @@ Route::get('/questionnaire', [QuestionnaireController::class, 'show']);
 
 // ✅ Questionnaire Form Submission
 Route::post('/submit-questionnaire', [QuestionnaireController::class, 'store'])->name('questionnaire.store');
+
+Route::get('/thank-you', function () {
+    return view('thank-you');
+})->name('thank.you');

@@ -19,7 +19,7 @@
             @foreach($products as $product)
                 <div class="swiper-slide">
                     <div class="card h-100 border-0 shadow-sm">
-                        <img src="{{ $product['product']['image'] ?: 'https://via.placeholder.com/300x300?text=No+Image' }}"
+                        <img src="{{ $product['product']['image'] ?: asset('images/no_image.jpg') }}"
                              alt="{{ $product['product']['title'] }}"
                              class="card-img-top"
                              style="height: 220px; object-fit: cover; border-radius: 10px 10px 0 0;">
