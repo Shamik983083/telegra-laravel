@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
-
+use App\Models\QuestionnaireResponse; // ✅ <--- ADD THIS IMPORT
 class QuestionnaireController extends Controller
 {
     public function show()
@@ -52,4 +52,30 @@ class QuestionnaireController extends Controller
             'rawResponse' => $data,
         ]);
     }
+
+public function store(Request $request)
+    {
+        $answers = $request->input('answers', []);
+        $product = session('selected_product');
+        $questionnaireId = session('questionnaire_instance_id');
+        $sessionId = session()->getId();
+
+        if (empty($answers)) {
+            return back()->with('error', 'Please answer all questions.');
+        }
+
+        // Save to DB
+        QuestionnaireResponse::create([
+            'session_id' => $sessionId,
+            'product_id' => $product['id'] ?? null,
+            'questionnaire_instance_id' => $questionnaireId,
+            'responses' => $answers,
+        ]);
+
+        // Save in session too (for review or next step)
+        session(['questionnaire_answers' => $answers]);
+
+        return redirect('/thank-you')->with('success', 'Your responses have been saved successfully!');
+    }
+
 }

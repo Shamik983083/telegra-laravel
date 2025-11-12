@@ -27,4 +27,4 @@ Route::post('/checkout', [CheckoutController::class, 'process'])->name('checkout
 Route::get('/questionnaire', [QuestionnaireController::class, 'show']);
 
 // ✅ Questionnaire Form Submission
-//Route::post('/submit-questionnaire', [QuestionnaireController::class, 'store']);
+Route::post('/submit-questionnaire', [QuestionnaireController::class, 'store'])->name('questionnaire.store');
